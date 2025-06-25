@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <title>AI Suara Otomatis + Indikator & Memori Kontekstual</title>
+  <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-firestore-compat.js"></script>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      text-align: center;
+      padding: 2em;
+      background: #1a1a1a; /* Dark background */
+      color: #e0e0e0; /* Light text */
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+      overflow: hidden; /* Prevent scrollbar from animation */
+      position: relative; /* For background animations */
+    }
+    .container {
+      background: #2a2a2a;
+      padding: 2.5em 3.5em;
+      border-radius: 15px;
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+      max-width: 500px;
+      width: 90%;
+      box-sizing: border-box;
+      position: relative;
+      overflow: hidden;
+      z-index: 10; /* Above background animations */
+    }
+    h2 {
+      color: #ffffff;
+      margin-bottom: 1.5em;
+      font-size: 2em;
+      letter-spacing: 1px;
+    }
+    .status {
+      font-size: 1.1em;
+      margin-top: 15px;
+      color: #9e9e9e;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    .status-icon {
+      width: 24px;
+      height: 24px;
+      fill: #9e9e9e;
+      transition: fill 0.3s ease;
+    }
+    .status.preparing .status-icon {
+      fill: #607d8b; /* Blue-grey for preparing */
+    }
+    .status.listening .status-icon {
+      fill: #e57373; /* Red for listening */
+    }
+    .status.speaking .status-icon {
+      fill: #81c784; /* Green for speaking */
+    }
+    .status.playing-music .status-icon {
+      fill: #bbdefb; /* Light blue for music */
+    }
+    .status.error .status-icon, .status.warning .status-icon {
+      fill: #ffb74d; /* Amber for warning/error */
+    }
+
+    .dot-typing::after {
+      content: ' •••';
+      animation: dots 1s steps(3, end) infinite;
+    }
+    @keyframes dots {
+      0% { content: ' •'; }
+      33% { content: ' ••'; }
+      66% { content: ' •••'; }
+      100% { content: ' •'; }
+    }
+    .text-display {
+      margin-top: 2em;
+      padding: 1em;
+      background: #3a3a3a;
+      border-radius: 8px;
+      text-align: left;
+      font-size: 0.95em;
+      min-height: 60px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+    .text-display p {
+      margin: 0.5em 0;
+      line-height: 1.5;
+    }
+    .text-display strong {
+      color: #ffffff;
+    }
+    audio {
+      width: 100%;
+      margin-top: 25px;
+      filter: invert(1) hue-rotate(180deg);
+      display: none;
+    }
+
+    /* SVG Animations */
+    .icon-anim {
+      transform-origin: center;
+      animation: pulse 1.5s infinite ease-in-out;
+    }
+    @keyframes pulse {
+      0% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.1); opacity: 0.8; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+
+    .ripple-background {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 0;
+      height: 0;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.1);
+      transform: translate(-50%, -50%);
+      animation: none;
+      opacity: 0;
+      z-index: 0;
+    }
+
+    @keyframes ripple {
+      0% { width: 0; height: 0; opacity: 0.5; }
+      100% { width: 400px; height: 400px; opacity: 0; }
+    }
+
+    .ripple-background.active {
+      animation: ripple 2s infinite ease-out;
+    }
+
+    /* Confetti-like particles */
+    .particle {
+      position: absolute;
+      background-color: #ffffff;
+      border-radius: 50%;
+      opacity: 0;
+      pointer-events: none;
+      animation: fadeOut 2s forwards;
+    }
+    @keyframes fadeOut {
+      0% { transform: translate(0, 0) scale(1); opacity: 1; }
+      100% { transform: translate(var(--x), var(--y)) scale(0.2); opacity: 0; }
+    }
+
+    /* Water Wave Animation */
+    .water-wave {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 0;
+      height: 0;
+      border-radius: 50%;
+      background: transparent;
+      box-shadow: 0 0 0 0 rgba(173, 216, 230, 0.7); /* Light blue shadow */
+      opacity: 0;
+      z-index: 5;
+      pointer-events: none;
+    }
+
+    .water-wave.active {
+      animation: waterWave 1.5s ease-out forwards;
+    }
+
+    @keyframes waterWave {
+      0% {
+        width: 0;
+        height: 0;
+        opacity: 1;
+        box-shadow: 0 0 0 0 rgba(173, 216, 230, 0.7);
+      }
+      100% {
+        width: 300px; /* Max size of the wave */
+        height: 300px;
+        opacity: 0;
+        box-shadow: 0 0 0 50px rgba(173, 216, 230, 0); /* Fades out and expands */
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="rippleEffect" class="ripple-background"></div>
+  <div id="waterWaveEffect" class="water-wave"></div>
+
+  <div class="container">
+    <h2>AI Voice Interaktif</h2>
+    <p class="status" id="status">
+      <svg id="statusIcon" class="status-icon" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="8" />
+      </svg>
+      <span>Menyiapkan...</span>
+    </p>
+    <div class="text-display">
+      <p><strong>Kamu:</strong> <span id="userText">...</span></p>
+      <p><strong>AI:</strong> <span id="aiText">...</span></p>
+    </div>
+    <audio id="audio" controls autoplay></audio>
+    <audio id="backgroundMusic" loop></audio>
+  </div>
+
+  <script>
+    // --- KONFIGURASI API DAN ELEMEN DOM ---
+    const apiKey = "c5ec416213e84beeb6a18a15249e7041"; // Ganti dengan API Key Play.ht Anda
+    const userId = "limTQlyFI4aWMAFyjEI4jE8dg1f2"; // Ganti dengan User ID Play.ht Anda
+    const audioEl = document.getElementById("audio");
+    const backgroundMusicEl = document.getElementById("backgroundMusic");
+    const statusEl = document.getElementById("status");
+    const statusIconEl = document.getElementById("statusIcon");
+    const rippleEl = document.getElementById("rippleEffect");
+    const waterWaveEl = document.getElementById("waterWaveEffect");
+    const containerEl = document.querySelector('.container');
+
+    const backgroundMusicSrc = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"; // Contoh musik latar
+
+    // --- RESPONS AI BAWAAN (DEFAULT) ---
+    const aiResponses = {
+      "halo": ["Halo juga! Ada yang bisa saya bantu hari ini?", "Hai, senang bisa ngobrol dengan Anda."],
+      "apa kabar": ["Saya baik-baik saja, terima kasih. Bagaimana dengan Anda?", "Saya selalu siap. Anda bagaimana?"],
+      "siapa nama": ["Saya adalah asisten AI. Anda bisa memanggil saya Bot.", "Saya tidak punya nama, tapi saya di sini untuk membantu."],
+      "cuaca": ["Maaf, saya belum memiliki informasi cuaca.", "Saya tidak punya sensor cuaca."],
+      "terima kasih": ["Sama-sama! Senang bisa membantu.", "Senang bisa berguna!"],
+      "selamat tinggal": ["Sampai jumpa lagi! Semoga hari Anda menyenangkan.", "Dadah! Sampai ketemu nanti."],
+      "buat semuanya": ["Tentu, saya akan memutar musik untuk semuanya!", "Oke, musik untuk semua akan segera diputar."],
+      "musik": ["Saya bisa memutar musik jika Anda mau. Cukup katakan 'putar musik' atau 'buat semuanya'.", "Suka musik? Katakan saja 'putar musik'."],
+      "diam": ["Baik, saya akan berhenti berbicara untuk sementara waktu.", "Dimengerti. Saya akan hening sejenak."],
+      "ceritakan sesuatu": ["Tentu, pernahkah Anda mendengar tentang fakta bahwa lebah bisa mengepakkan sayapnya 200 kali per detik?", "Ini fakta menarik: Kucing bisa membuat lebih dari 100 suara yang berbeda, sedangkan anjing hanya sekitar 10."],
+      "default": ["Maaf, saya tidak begitu mengerti. Bisakah Anda mengulanginya?", "Hmm, saya kurang paham. Bisa coba lagi?", "Saya masih belajar. Apa yang Anda maksud?"],
+      // Respons khusus untuk memori
+      "memory_response_prefix": [": ", ": ", ": "]
+    };
+
+    // --- KONFIGURASI DAN INISIALISASI FIREBASE ---
+    const firebaseConfig = {
+      apiKey: "AIzaSyD9vbghwaETHsqzLgSSANb6720n34smamw",
+      authDomain: "linkhub-ffc34.firebaseapp.com",
+      projectId: "linkhub-ffc34",
+      storageBucket: "linkhub-ffc34.firebasestorage.app",
+      messagingSenderId: "638716492602",
+      appId: "1:638716492602:web:685b9cd5c895f623cc6e03",
+      measurementId: "G-2RDLQXEB9C"
+    };
+
+    // Inisialisasi Firebase
+    firebase.initializeApp(firebaseConfig);
+
+    // Dapatkan instance Firestore
+    const db = firebase.firestore();
+
+    // Koleksi tempat kita akan menyimpan riwayat percakapan
+    const conversationCollection = db.collection("conversation_history_v4"); // Koleksi baru untuk perbaikan ini
+    // --- AKHIR KONFIGURASI FIREBASE ---
+
+    // --- LOGIKA MEMORI PERCAKAPAN LOKAL DAN PENCARIAN ---
+    let conversationHistory = []; // Array lokal untuk memori percakapan
+    const MAX_CONVERSATION_HISTORY = 20; // Batas jumlah ucapan yang disimpan
+
+    // Fungsi untuk memuat riwayat percakapan dari Firestore saat startup
+    async function loadConversationHistory() {
+        try {
+            updateStatus("Memuat memori...", "preparing", true);
+            const snapshot = await conversationCollection
+                .orderBy("timestamp", "desc")
+                .limit(MAX_CONVERSATION_HISTORY)
+                .get();
+
+            conversationHistory = [];
+            snapshot.forEach(doc => {
+                conversationHistory.unshift(doc.data().text); // Simpan teks asli
+            });
+            console.log("Riwayat Percakapan dimuat dari Firestore:", conversationHistory);
+            updateStatus("Memori dimuat.", "success");
+        } catch (error) {
+            console.error("Error memuat riwayat percakapan:", error);
+            updateStatus("Gagal memuat memori.", "error");
+        }
+    }
+
+    // Fungsi untuk menambahkan ucapan pengguna ke riwayat dan menyimpannya ke Firestore
+    async function addToConversationHistory(text) {
+        // Simpan teks asli ke dalam memori lokal dan Firestore
+        conversationHistory.push(text); // Simpan teks asli
+        if (conversationHistory.length > MAX_CONVERSATION_HISTORY) {
+            conversationHistory.shift();
+        }
+
+        try {
+            await conversationCollection.add({
+                text: text,
+                timestamp: firebase.firestore.FieldValue.serverTimestamp()
+            });
+            console.log("Riwayat Percakapan disimpan ke Firestore:", text);
+        } catch (error) {
+            console.error("Error menyimpan riwayat percakapan ke Firestore:", error);
+        }
+    }
+
+    /**
+     * Menghitung skor kemiripan antara dua string menggunakan Jaccard Index.
+     */
+    function calculateJaccardSimilarity(text1, text2) {
+        const set1 = new Set(text1.toLowerCase().split(/\s+/).filter(word => word.length > 2));
+        const set2 = new Set(text2.toLowerCase().split(/\s+/).filter(word => word.length > 2));
+
+        if (set1.size === 0 || set2.size === 0) return 0;
+
+        const intersection = new Set([...set1].filter(word => set2.has(word)));
+        const union = new Set([...set1, ...set2]);
+
+        return intersection.size / union.size;
+    }
+
+    /**
+     * Mencari kalimat paling relevan dari riwayat percakapan yang BUKAN query itu sendiri
+     * Mengembalikan teks yang paling relevan atau null.
+     */
+    function findMostRelevantEntryInHistory(query) {
+        let bestMatchText = null;
+        let maxSimilarity = 0;
+        const lowerCaseQuery = query.toLowerCase();
+
+        for (let i = conversationHistory.length - 1; i >= 0; i--) {
+            const historyEntry = conversationHistory[i];
+            const lowerCaseHistoryEntry = historyEntry.toLowerCase();
+
+            // Hindari mencocokkan query dengan dirinya sendiri secara persis
+            if (lowerCaseHistoryEntry === lowerCaseQuery) {
+                continue;
+            }
+
+            const similarity = calculateJaccardSimilarity(lowerCaseQuery, lowerCaseHistoryEntry);
+
+            if (similarity > maxSimilarity) {
+                maxSimilarity = similarity;
+                bestMatchText = historyEntry; // Simpan teks asli
+            }
+        }
+        // Ambang batas relevansi: disesuaikan agar tidak terlalu sensitif pada pengulangan
+        const RELEVANCE_THRESHOLD = 0.3; // Bisa disesuaikan lagi, mungkin antara 0.25 - 0.4
+        if (maxSimilarity >= RELEVANCE_THRESHOLD) {
+            return bestMatchText;
+        }
+        return null;
+    }
+
+    /**
+     * Mengidentifikasi kata kunci penting dari teks (stopwords dihilangkan).
+     */
+    function extractKeywords(text) {
+        const stopwords = new Set(["yang", "dan", "atau", "adalah", "ini", "itu", "di", "ke", "dari", "saya", "kamu", "dia", "mereka", "kita", "apa", "siapa", "mengapa", "bagaimana", "dimana", "kapan", "bukan", "lagi"]); // Tambah "lagi" sebagai stopword jika sering muncul dalam pertanyaan
+        return text.toLowerCase()
+                   .replace(/[.,!?]/g, '')
+                   .split(/\s+/)
+                   .filter(word => word.length > 2 && !stopwords.has(word));
+    }
+
+
+    // Fungsi untuk memilih respons acak dari array
+    function getRandomResponse(responsesArray) {
+        return responsesArray[Math.floor(Math.random() * responsesArray.length)];
+    }
+
+    // --- FUNGSI UTAMA UNTUK MENGHASILKAN RESPON AI ---
+    function getAiResponse(userText) {
+      const lowerCaseText = userText.toLowerCase();
+
+      // 1. Cek untuk perintah spesifik (prioritas tertinggi)
+      if (lowerCaseText.includes("buat semuanya") || lowerCaseText.includes("putar musik")) {
+        playBackgroundMusic();
+        return getRandomResponse(aiResponses["buat semuanya"]);
+      }
+      if (lowerCaseText.includes("halo") || lowerCaseText.includes("hai")) {
+        return getRandomResponse(aiResponses["halo"]);
+      }
+      if (lowerCaseText.includes("apa kabar") || lowerCaseText.includes("bagaimana kabarmu")) {
+        return getRandomResponse(aiResponses["apa kabar"]);
+      }
+      if (lowerCaseText.includes("siapa nama")) {
+        return getRandomResponse(aiResponses["siapa nama"]);
+      }
+      if (lowerCaseText.includes("cuaca")) {
+        return getRandomResponse(aiResponses["cuaca"]);
+      }
+      if (lowerCaseText.includes("terima kasih") || lowerCaseText.includes("makasih")) {
+        return getRandomResponse(aiResponses["terima kasih"]);
+      }
+      if (lowerCaseText.includes("selamat tinggal") || lowerCaseText.includes("dadah")) {
+        return getRandomResponse(aiResponses["selamat tinggal"]);
+      }
+      if (lowerCaseText.includes("diam") || lowerCaseText.includes("berhenti bicara")) {
+        return getRandomResponse(aiResponses["diam"]);
+      }
+      if (lowerCaseText.includes("ceritakan sesuatu") || lowerCaseText.includes("cerita dong")) {
+        return getRandomResponse(aiResponses["ceritakan sesuatu"]);
+      }
+      if (lowerCaseText.includes("musik")) {
+          return getRandomResponse(aiResponses["musik"]);
+      }
+
+      // 2. Logika untuk mencari jawaban langsung dari memori
+      const relevantMemoryText = findMostRelevantEntryInHistory(userText);
+
+      if (relevantMemoryText) {
+          // Jika ditemukan teks yang sangat relevan dan BUKAN merupakan pertanyaan yang sama,
+          // bot akan menyajikan informasi dari teks memori tersebut.
+          // Kita tambahkan sedikit frasa pengantar agar lebih alami,
+          // tapi tetap fokus pada informasi yang tersimpan.
+          const prefix = getRandomResponse(aiResponses["memory_response_prefix"]);
+          return `${prefix}**${relevantMemoryText}**`;
+      }
+
+      // 3. Jika tidak ada jawaban sangat relevan dari memori, berikan respons default
+      return getRandomResponse(aiResponses["default"]);
+    }
+
+    // --- FUNGSI UTILITY UI DAN ANIMASI ---
+    const icons = {
+      preparing: '<svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/><path d="M12 7V3h-2v4h2zM12 17v4h-2v-4h2zM17 12h4v-2h-4v2zM3 12h4v-2H3v2z"/></svg>',
+      listening: '<svg viewBox="0 0 24 24" class="icon-anim"><path d="M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3.53-2.64 6.43-6.17 6.95V21h-2v-3.05C6.34 17.43 3.68 14.53 3.68 11H2c0 3.98 3.15 7.23 7 7.74V21h6v-2.26c3.85-.51 7-3.76 7-7.74h-1.68z"/></svg>',
+      speaking: '<svg viewBox="0 0 24 24" class="icon-anim"><path d="M12 2c-4.97 0-9 4.03-9 9v2c0 4.97 4.03 9 9 9s9-4.03 9-9v-2c0-4.97-4.03-9-9-9zM7 11v-1c0-2.76 2.24-5 5-5s5 2.24 5 5v1c0 2.76-2.24 5-5 5s-5-2.24-5-5zM12 19c-1.66 0-3-1.34-3-3h6c0 1.66-1.34 3-3 3z"/></svg>',
+      playing_music: '<svg viewBox="0 0 24 24" class="icon-anim"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>',
+      success: '<svg viewBox="0 0 24 24"><path d="M9 16.2L4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4L9 16.2z"/></svg>',
+      error: '<svg viewBox="0 0 24 24"><path d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>'
+    };
+
+    function updateStatus(message, type, showDots = false) {
+      statusEl.querySelector('span').textContent = message;
+      statusEl.className = `status ${type}`;
+      statusIconEl.innerHTML = icons[type];
+
+      if (showDots) {
+        statusEl.classList.add("dot-typing");
+      } else {
+        statusEl.classList.remove("dot-typing");
+      }
+
+      if (type === 'listening') {
+        rippleEl.classList.add('active');
+        waterWaveEl.classList.remove('active');
+      } else {
+        rippleEl.classList.remove('active');
+      }
+    }
+
+    function createParticle(event) {
+      const particle = document.createElement('div');
+      particle.className = 'particle';
+      document.body.appendChild(particle);
+
+      const size = Math.random() * 10 + 5;
+      particle.style.width = `${size}px`;
+      particle.style.height = `${size}px`;
+      particle.style.left = `${event.clientX}px`;
+      particle.style.top = `${event.clientY}px`;
+
+      const angle = Math.random() * 2 * Math.PI;
+      const distance = Math.random() * 100 + 50;
+      const translateX = Math.cos(angle) * distance;
+      const translateY = Math.sin(angle) * distance;
+
+      particle.style.setProperty('--x', `${translateX}px`);
+      particle.style.setProperty('--y', `${translateY}px`);
+
+      particle.addEventListener('animationend', () => {
+        particle.remove();
+      });
+    }
+
+    function triggerWaterWave() {
+      waterWaveEl.classList.remove('active');
+      void waterWaveEl.offsetWidth;
+      waterWaveEl.classList.add('active');
+    }
+
+    // --- FUNGSI PLAY.HT (TEXT-TO-SPEECH) ---
+    async function generateVoice(aiText) {
+      document.getElementById("aiText").textContent = aiText;
+      updateStatus("🟡 Bot sedang menjawab...", "speaking", true);
+
+      try {
+        const response = await fetch("https://api.play.ht/api/v2/tts", {
+          method: "POST",
+          headers: {
+            "Authorization": apiKey,
+            "X-User-Id": userId,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            text: aiText,
+            voice: "s3://mockingbird-prod/standard/voices/en/us/amy.mp3", // Pilih suara yang sesuai
+            output_format: "mp3"
+          })
+        });
+
+        const data = await response.json();
+        const id = data.transcriptionId;
+
+        let audioUrl = "";
+        // Poll status hingga audio siap
+        for (let i = 0; i < 15; i++) {
+          await new Promise(r => setTimeout(r, 1500)); // Tunggu 1.5 detik
+          const statusRes = await fetch(`https://api.play.ht/api/v2/tts/${id}`, {
+            headers: {
+              "Authorization": apiKey,
+              "X-User-Id": userId
+            }
+          });
+          const statusData = await statusRes.json();
+          if (statusData.audioUrl) {
+            audioUrl = statusData.audioUrl;
+            break;
+          }
+        }
+
+        if (audioUrl) {
+          audioEl.src = audioUrl;
+          audioEl.play().catch(() => {
+            console.warn("Autoplay diblokir, mungkin perlu interaksi pengguna.");
+          });
+          audioEl.onended = () => {
+            updateStatus("✅ Siap mendengarkan...", "success");
+            listenVoice(); // Mulai mendengarkan lagi setelah bot selesai bicara
+          };
+        } else {
+          throw new Error("Gagal mendapatkan audio URL setelah beberapa percobaan dari Play.ht.");
+        }
+      } catch (e) {
+        alert("❌ Terjadi kesalahan saat generate suara dari Play.ht: " + e.message);
+        console.error(e);
+        updateStatus("⚠️ Coba bicara lagi...", "error");
+        listenVoice(); // Lanjutkan mendengarkan meskipun ada error TTS
+      }
+    }
+
+    // --- FUNGSI SPEECH RECOGNITION (INPUT SUARA) ---
+    function listenVoice() {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRecognition) {
+        alert("Browser kamu tidak mendukung SpeechRecognition API. Coba gunakan Chrome atau Edge.");
+        updateStatus("⚠️ Browser tidak support SpeechRecognition.", "error");
+        return;
+      }
+
+      const recognition = new SpeechRecognition();
+      recognition.lang = 'id-ID'; // Mengatur bahasa ke Bahasa Indonesia
+      recognition.interimResults = true; // Mengizinkan hasil sementara
+      recognition.maxAlternatives = 1; // Hanya ambil alternatif terbaik
+
+      recognition.start(); // Mulai mendengarkan
+
+      updateStatus("🔴 Sedang mendengarkan kamu...", "listening");
+      waterWaveEl.classList.remove('active'); // Pastikan animasi gelombang mati saat mulai mendengarkan
+
+      recognition.onresult = (event) => {
+        const spokenText = event.results[0][0].transcript;
+        document.getElementById("userText").textContent = spokenText;
+
+        if (event.results[0].isFinal) {
+          // Ketika hasil akhir diterima, tambahkan ke riwayat dan proses respons
+          addToConversationHistory(spokenText);
+          const aiText = getAiResponse(spokenText);
+          generateVoice(aiText);
+          waterWaveEl.classList.remove('active'); // Hentikan animasi gelombang
+        } else {
+          // Jika masih hasil sementara, aktifkan animasi gelombang jika belum aktif
+          if (!waterWaveEl.classList.contains('active')) {
+             triggerWaterWave();
+          }
+        }
+      };
+
+      recognition.onerror = (event) => {
+        console.warn("Speech recognition error:", event.error);
+        document.getElementById("userText").textContent = "Tidak terdeteksi.";
+        waterWaveEl.classList.remove('active'); // Hentikan animasi gelombang
+
+        // Penanganan error spesifik
+        if (event.error === "no-speech") {
+          updateStatus("⚠️ Tidak ada suara terdeteksi, coba lagi...", "warning");
+        } else if (event.error === "not-allowed") {
+          updateStatus("⚠️ Izin mikrofon ditolak, izinkan di pengaturan browser.", "error");
+        } else {
+          updateStatus("⚠️ Terjadi kesalahan pada mikrofon, coba lagi...", "error");
+        }
+        setTimeout(() => listenVoice(), 2000); // Coba mendengarkan lagi setelah jeda
+      };
+
+      recognition.onend = () => {
+        // Jika recognition berakhir (misal karena user diam) dan status masih 'listening',
+        // berarti tidak ada input final yang diproses, jadi mulai mendengarkan lagi.
+        if (statusEl.className.includes("listening")) {
+           updateStatus("🔄 Menyiapkan kembali...", "preparing", true);
+           waterWaveEl.classList.remove('active');
+           setTimeout(() => listenVoice(), 1000);
+        }
+      };
+    }
+
+    // --- FUNGSI MUSIK LATAR ---
+    function playBackgroundMusic() {
+      if (!backgroundMusicEl.src) {
+        backgroundMusicEl.src = backgroundMusicSrc;
+      }
+      backgroundMusicEl.play().then(() => {
+        updateStatus("🎵 Musik diputar...", "playing-music");
+      }).catch(e => {
+        console.error("Gagal memutar musik:", e);
+        updateStatus("⚠️ Gagal memutar musik.", "error");
+      });
+    }
+
+    // --- INISIALISASI SAAT HALAMAN DIMUAT ---
+    window.onload = () => {
+      // Pertama, muat riwayat percakapan dari Firestore
+      loadConversationHistory().then(() => {
+          // Setelah memori dimuat, baru bot siap dan mulai mendengarkan input
+          updateStatus("✅ Siap mendengarkan...", "success");
+          listenVoice();
+      });
+
+      // Tambahkan event listener untuk animasi partikel klik
+      document.addEventListener('click', createParticle);
+    };
+  </script>
+</body>
+</html>
